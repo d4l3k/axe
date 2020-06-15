@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+
+	"github.com/pkg/errors"
 )
 
 type Node struct {
@@ -40,16 +42,22 @@ func sumInts(a []int) int {
 	return sum
 }
 
+type Partition struct{
+	ExternalInputs []int
+	Nodes map[int]struct{}
+	Fixed bool
+}
+
 type Partitioning struct {
 	Nodes      []Node
 	EdgeCost   map[int]int
-	Partitions []map[int]struct{}
+	Partitions []Partition
 }
 
-func (p Partitioning) Cost() int {
+func (p Partitioning) Cost() (int, error) {
 	sources := map[int]int{}
-	for group, nodes := range p.Partitions {
-		for nodeId := range nodes {
+	for group, partition := range p.Partitions {
+		for nodeId := range partition.Nodes {
 			for _, output := range p.Nodes[nodeId].Outputs {
 				sources[output] = group
 			}
@@ -57,12 +65,15 @@ func (p Partitioning) Cost() int {
 	}
 
 	costs := make([]int, len(p.Partitions))
-	for group, nodes := range p.Partitions {
-		for nodeId := range nodes {
+	for group, partition := range p.Partitions {
+		for nodeId := range partition.Nodes {
 			node := p.Nodes[nodeId]
 			costs[group] += node.Cost
 			for _, input := range node.Inputs {
-				source := sources[input]
+				source, ok := sources[input]
+				if !ok {
+					return 0, errors.Errorf("failed to find source for input %d", input)
+				}
 				if source != group {
 					costs[group] += p.EdgeCost[input]
 					costs[source] += p.EdgeCost[input]
@@ -71,37 +82,47 @@ func (p Partitioning) Cost() int {
 		}
 	}
 
-	max := maxInts(costs)
+	// Ignore costs from fixed nodes
+	var filteredCosts []int
+	for partitionId, cost := range costs {
+		if !p.Partitions[partitionId].Fixed {
+			filteredCosts = append(filteredCosts, cost)
+		}
+	}
 
+	max := maxInts(filteredCosts)
 	imbalance := 0
-	for _, a := range costs {
+	for _, a := range filteredCosts {
 		imbalance += max - a
 	}
 
-	totalCost := sumInts(costs)
+	totalCost := sumInts(filteredCosts)
 
-	return totalCost + imbalance
+	return totalCost + imbalance, nil
 }
 func (p Partitioning) Move(id, from, to int) {
-	delete(p.Partitions[from], id)
-	p.Partitions[to][id] = struct{}{}
+	delete(p.Partitions[from].Nodes, id)
+	p.Partitions[to].Nodes[id] = struct{}{}
 }
 
 func (p Partitioning) PickOtherGroup(g int) int {
-	randGroup := rand.Intn(len(p.Partitions))
-	if randGroup == g {
-		randGroup = (randGroup + 1) % len(p.Partitions)
+	var candidates []int
+	for id, partition := range p.Partitions {
+		if id == g || partition.Fixed{
+			continue
+		}
+		candidates = append(candidates, id)
 	}
-	return randGroup
+	return candidates[rand.Intn(len(candidates))]
 }
 
-func partitionMin(p map[int]struct{}) int {
-	if len(p) == 0 {
+func (p Partition) MinID() int {
+	if len(p.Nodes) == 0 {
 		return 0
 	}
 	first := true
 	min := 0
-	for v := range p {
+	for v := range p.Nodes {
 		if first {
 			min = v
 			first = false
@@ -117,12 +138,12 @@ func partitionMin(p map[int]struct{}) int {
 func (p Partitioning) Normalize() {
 	type entry struct {
 		min       int
-		partition map[int]struct{}
+		partition Partition
 	}
 	var sortable []entry
 	for _, part := range p.Partitions {
 		sortable = append(sortable, entry{
-			min:       partitionMin(part),
+			min:       part.MinID(),
 			partition: part,
 		})
 	}
@@ -134,7 +155,7 @@ func (p Partitioning) Normalize() {
 	}
 }
 
-func Optimize(nodes []Node, edgeCost map[int]int, n int, rounds int, initialTemperature float64) Partitioning {
+func MakePartitioning(nodes []Node, edgeCost map[int]int, n int) (Partitioning, error) {
 	// Do an initial partition.
 	p := Partitioning{
 		Nodes:    nodes,
@@ -142,32 +163,48 @@ func Optimize(nodes []Node, edgeCost map[int]int, n int, rounds int, initialTemp
 	}
 	partitionSize := len(nodes) / n
 	for i := 0; i < n; i++ {
-		p.Partitions = append(p.Partitions, map[int]struct{}{})
+		p.Partitions = append(p.Partitions, Partition{Nodes:map[int]struct{}{}})
 	}
 	for i := 0; i < len(nodes); i++ {
-		p.Partitions[i%partitionSize][i] = struct{}{}
+		p.Partitions[i%partitionSize].Nodes[i] = struct{}{}
 	}
+	return p, nil
+}
 
+func (p Partitioning) Optimize( rounds int, initialTemperature float64)  error {
 	// Do N rounds and then continue until we can't improve any more.
 	improved := false
-	curCost := p.Cost()
+	curCost, err := p.Cost()
+	if err != nil {
+		return  err
+	}
 	for round := 0; (round < rounds) || improved; round++ {
 		improved = false
 
 		temperature := math.Max(initialTemperature*(1-float64(round)/float64(rounds)), 0)
 		log.Printf("round %d: temp=%f cost=%d", round, temperature, curCost)
 
-		for group, nodes := range p.Partitions {
-			for nodeId := range nodes {
+		for group, partition := range p.Partitions {
+			if partition.Fixed {
+				continue
+			}
+
+			for nodeId := range partition.Nodes {
 				target := p.PickOtherGroup(group)
 				if rand.Float64() < temperature {
 					p.Move(nodeId, group, target)
-					curCost = p.Cost()
+					curCost, err = p.Cost()
+					if err != nil {
+						return  err
+					}
 					continue
 				}
 
 				p.Move(nodeId, group, target)
-				newCost := p.Cost()
+				newCost, err := p.Cost()
+				if err != nil {
+					return  err
+				}
 				if newCost < curCost {
 					improved = true
 					curCost = newCost
@@ -180,5 +217,5 @@ func Optimize(nodes []Node, edgeCost map[int]int, n int, rounds int, initialTemp
 	}
 	log.Printf("final cost %d", curCost)
 	p.Normalize()
-	return p
+	return nil
 }

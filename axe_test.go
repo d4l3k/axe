@@ -13,7 +13,7 @@ func partitionsEqual(t *testing.T, p Partitioning, want [][]int) {
 	}
 	for g, ids := range want {
 		var idList []int
-		for id := range p.Partitions[g] {
+		for id := range p.Partitions[g].Nodes {
 			idList = append(idList, id)
 		}
 
@@ -47,7 +47,13 @@ func TestSimple(t *testing.T) {
 		1: 1,
 		2: 1,
 	}
-	p := Optimize(nodes, edgeCost, 3, 100, 0.1)
+	p, err := MakePartitioning(nodes, edgeCost, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Optimize(100, 0.1); err != nil {
+		t.Fatal(err)
+	}
 	partitionsEqual(t, p, [][]int{
 		[]int{0},
 		[]int{1},
