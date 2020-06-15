@@ -60,3 +60,36 @@ func TestSimple(t *testing.T) {
 		[]int{2},
 	})
 }
+
+func TestExternalInputs(t *testing.T) {
+	p := Partitioning{
+		EdgeCost: map[int]int{
+			1: 1,
+			2: 2,
+		},
+		Partitions: []Partition{
+			{
+				ExternalInputs: []int{1, 2},
+			},
+			{
+				Nodes: map[int]struct{}{0: struct{}{}},
+			},
+		},
+		Nodes: []Node{
+			{Inputs: []int{1}},
+		},
+	}
+	cost, err := p.Cost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Partition 0: 1 + 2 + 1 = 4
+	// Partition 1: 1 = 1
+	// Total cost = 5
+	// Imbalance = 3
+	// Final = Total Cost + Imbalance = 8
+	want := 8
+	if cost != want {
+		t.Fatalf("expected cost = %d; got %d", want, cost)
+	}
+}
