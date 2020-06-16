@@ -54,7 +54,7 @@ type Partitioning struct {
 	Partitions []Partition
 }
 
-func (p Partitioning) Cost() (int, error) {
+func (p Partitioning) Cost() (int, []int, error) {
 	sources := map[int]int{}
 	for group, partition := range p.Partitions {
 		for nodeId := range partition.Nodes {
@@ -72,18 +72,26 @@ func (p Partitioning) Cost() (int, error) {
 		for _, output := range partition.ExternalInputs {
 			costs[group] += p.EdgeCost[output]
 		}
-		for nodeId := range partition.Nodes {
-			node := p.Nodes[nodeId]
+	}
+
+	for nodeId, node := range p.Nodes {
+		for group, partition := range p.Partitions {
+			if _, ok := partition.Nodes[nodeId]; !ok {
+				continue
+			}
 			costs[group] += node.Cost
 			for _, input := range node.Inputs {
 				source, ok := sources[input]
 				if !ok {
-					return 0, errors.Errorf("failed to find source for input %d", input)
+					return 0, nil, errors.Errorf("failed to find source for input %d", input)
 				}
 				if source != group {
 					costs[group] += p.EdgeCost[input]
 					costs[source] += p.EdgeCost[input]
 				}
+			}
+			for _, output := range node.Outputs {
+				sources[output] = group
 			}
 		}
 	}
@@ -104,7 +112,7 @@ func (p Partitioning) Cost() (int, error) {
 
 	totalCost := sumInts(filteredCosts)
 
-	return totalCost + imbalance, nil
+	return totalCost + imbalance, costs, nil
 }
 func (p Partitioning) Move(id, from, to int) {
 	delete(p.Partitions[from].Nodes, id)
@@ -180,7 +188,7 @@ func MakePartitioning(nodes []Node, edgeCost map[int]int, n int) (Partitioning, 
 func (p Partitioning) Optimize(rounds int, initialTemperature float64) error {
 	// Do N rounds and then continue until we can't improve any more.
 	improved := false
-	curCost, err := p.Cost()
+	curCost, _, err := p.Cost()
 	if err != nil {
 		return err
 	}
@@ -199,7 +207,7 @@ func (p Partitioning) Optimize(rounds int, initialTemperature float64) error {
 				target := p.PickOtherGroup(group)
 				if rand.Float64() < temperature {
 					p.Move(nodeId, group, target)
-					curCost, err = p.Cost()
+					curCost, _, err = p.Cost()
 					if err != nil {
 						return err
 					}
@@ -207,7 +215,7 @@ func (p Partitioning) Optimize(rounds int, initialTemperature float64) error {
 				}
 
 				p.Move(nodeId, group, target)
-				newCost, err := p.Cost()
+				newCost, _, err := p.Cost()
 				if err != nil {
 					return err
 				}
@@ -222,6 +230,5 @@ func (p Partitioning) Optimize(rounds int, initialTemperature float64) error {
 		}
 	}
 	log.Printf("final cost %d", curCost)
-	p.Normalize()
 	return nil
 }

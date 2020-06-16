@@ -54,6 +54,7 @@ func TestSimple(t *testing.T) {
 	if err := p.Optimize(100, 0.1); err != nil {
 		t.Fatal(err)
 	}
+	p.Normalize()
 	partitionsEqual(t, p, [][]int{
 		[]int{0},
 		[]int{1},
@@ -79,7 +80,7 @@ func TestExternalInputs(t *testing.T) {
 			{Inputs: []int{1}},
 		},
 	}
-	cost, err := p.Cost()
+	cost, _, err := p.Cost()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +90,44 @@ func TestExternalInputs(t *testing.T) {
 	// Imbalance = 3
 	// Final = Total Cost + Imbalance = 8
 	want := 8
+	if cost != want {
+		t.Fatalf("expected cost = %d; got %d", want, cost)
+	}
+}
+
+func TestMutations(t *testing.T) {
+	p := Partitioning{
+		EdgeCost: map[int]int{
+			1: 1,
+		},
+		Partitions: []Partition{
+			{
+				Nodes: map[int]struct{}{0: struct{}{}},
+			},
+			{
+				Nodes: map[int]struct{}{1: struct{}{}},
+			},
+			{
+				Nodes: map[int]struct{}{2: struct{}{}},
+			},
+		},
+		Nodes: []Node{
+			{Outputs: []int{1}},
+			{Inputs: []int{1}, Outputs: []int{1}},
+			{Inputs: []int{1}},
+		},
+	}
+	cost, _, err := p.Cost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Partition 0: 1
+	// Partition 1: 1 + 1
+	// Partition 2: 1
+	// Total cost = 4
+	// Imbalance = 2
+	// Final = Total Cost + Imbalance = 6
+	want := 6
 	if cost != want {
 		t.Fatalf("expected cost = %d; got %d", want, cost)
 	}
