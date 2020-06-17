@@ -48,10 +48,32 @@ type Partition struct {
 	Fixed          bool
 }
 
+func (a Partition) Copy() Partition {
+	b := Partition{
+		Nodes: map[int]struct{}{},
+		Fixed: a.Fixed,
+	}
+	for _, v := range a.ExternalInputs {
+		b.ExternalInputs = append(b.ExternalInputs, v)
+	}
+	for v := range a.Nodes {
+		b.Nodes[v] = struct{}{}
+	}
+	return b
+}
+
 type Partitioning struct {
 	Nodes      []Node
 	EdgeCost   map[int]int
 	Partitions []Partition
+}
+
+func (p Partitioning) CopyPartitions() []Partition {
+	var b []Partition
+	for _, part := range p.Partitions {
+		b = append(b, part.Copy())
+	}
+	return b
 }
 
 func (p Partitioning) Cost() (int, []int, error) {
@@ -75,10 +97,12 @@ func (p Partitioning) Cost() (int, []int, error) {
 	}
 
 	for nodeId, node := range p.Nodes {
+		found := false
 		for group, partition := range p.Partitions {
 			if _, ok := partition.Nodes[nodeId]; !ok {
 				continue
 			}
+			found = true
 			costs[group] += node.Cost
 			for _, input := range node.Inputs {
 				source, ok := sources[input]
@@ -86,13 +110,20 @@ func (p Partitioning) Cost() (int, []int, error) {
 					return 0, nil, errors.Errorf("failed to find source for input %d", input)
 				}
 				if source != group {
-					costs[group] += p.EdgeCost[input]
-					costs[source] += p.EdgeCost[input]
+					edgeCost, ok := p.EdgeCost[input]
+					if !ok {
+						return 0, nil, errors.Errorf("failed to find edge cost for input %d", input)
+					}
+					costs[group] += edgeCost
+					costs[source] += edgeCost
 				}
 			}
 			for _, output := range node.Outputs {
 				sources[output] = group
 			}
+		}
+		if !found {
+			return 0, nil, errors.Errorf("failed to find node %d", nodeId)
 		}
 	}
 
@@ -192,6 +223,8 @@ func (p Partitioning) Optimize(rounds int, initialTemperature float64) error {
 	if err != nil {
 		return err
 	}
+	bestCost := curCost
+	bestParts := p.CopyPartitions()
 	for round := 0; (round < rounds) || improved; round++ {
 		improved = false
 
@@ -228,7 +261,13 @@ func (p Partitioning) Optimize(rounds int, initialTemperature float64) error {
 				}
 			}
 		}
+
+		if curCost < bestCost {
+			bestCost = curCost
+			bestParts = p.CopyPartitions()
+		}
 	}
-	log.Printf("final cost %d", curCost)
+	log.Printf("final cost %d", bestCost)
+	p.Partitions = bestParts
 	return nil
 }
